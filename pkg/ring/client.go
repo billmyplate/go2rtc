@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/AlexxIT/go2rtc/pkg/core"
 	"github.com/AlexxIT/go2rtc/pkg/webrtc"
@@ -88,7 +89,7 @@ func Dial(rawURL string) (*Client, error) {
 		BundlePolicy:       pion.BundlePolicyBalanced,
 	}
 
-	api, err := webrtc.NewAPI()
+	api, err := webrtc.NewRingAPI()
 	if err != nil {
 		client.Stop()
 		return nil, err
@@ -166,6 +167,7 @@ func Dial(rawURL string) (*Client, error) {
 	})
 
 	client.prod = prod
+	prod.SetVideoCodecPreferences(webrtc.RingVideoCodecPreferences())
 
 	// Setup media configuration
 	medias := []*core.Media{
@@ -262,6 +264,12 @@ func (c *Client) onWSMessage(msg WSMessage) {
 				return
 			}
 
+			if err := answerIsH264(msg.Body.SDP); err != nil {
+				c.Stop()
+				c.connected.Done(err)
+				return
+			}
+
 			if err := prod.SetAnswer(msg.Body.SDP); err != nil {
 				c.Stop()
 				c.connected.Done(err)
@@ -303,6 +311,14 @@ func (c *Client) onWSMessage(msg WSMessage) {
 	case "pong":
 		// Ignore
 	}
+}
+
+func answerIsH264(sdp string) error {
+	upper := strings.ToUpper(sdp)
+	if !strings.Contains(upper, " H264/") || strings.Contains(upper, " H265/") {
+		return errors.New("ring: answer SDP is not H264")
+	}
+	return nil
 }
 
 func (c *Client) GetMedias() []*core.Media {

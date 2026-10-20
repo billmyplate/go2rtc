@@ -20,8 +20,15 @@ type Conn struct {
 
 	pc *webrtc.PeerConnection
 
-	offer  string
-	closed core.Waiter
+	offer                 string
+	closed                core.Waiter
+	videoCodecPreferences []webrtc.RTPCodecParameters
+}
+
+// SetVideoCodecPreferences limits the video codecs in the next offer.
+// An empty list leaves the media engine defaults, which is every registered video codec.
+func (c *Conn) SetVideoCodecPreferences(codecs []webrtc.RTPCodecParameters) {
+	c.videoCodecPreferences = codecs
 }
 
 func NewConn(pc *webrtc.PeerConnection) *Conn {
@@ -87,13 +94,16 @@ func NewConn(pc *webrtc.PeerConnection) *Conn {
 			}
 		}
 
-		if c.Mode == core.ModePassiveProducer && remote.Kind() == webrtc.RTPCodecTypeVideo {
+		if (c.Mode == core.ModePassiveProducer || c.Mode == core.ModeActiveProducer) && remote.Kind() == webrtc.RTPCodecTypeVideo {
 			go func() {
+				ticker := time.NewTicker(time.Second * 2)
+				defer ticker.Stop()
 				pkts := []rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: uint32(remote.SSRC())}}
-				for range time.NewTicker(time.Second * 2).C {
+				for {
 					if err := pc.WriteRTCP(pkts); err != nil {
 						return
 					}
+					<-ticker.C
 				}
 			}()
 		}

@@ -9,21 +9,24 @@ import (
 func (c *Conn) CreateOffer(medias []*core.Media) (string, error) {
 	// 1. Create transeivers with proper kind and direction
 	for _, media := range medias {
-		var err error
+		var (
+			tr  *webrtc.RTPTransceiver
+			err error
+		)
 		switch media.Direction {
 		case core.DirectionRecvonly:
-			_, err = c.pc.AddTransceiverFromKind(
+			tr, err = c.pc.AddTransceiverFromKind(
 				webrtc.NewRTPCodecType(media.Kind),
 				webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionRecvonly},
 			)
 		case core.DirectionSendonly:
-			_, err = c.pc.AddTransceiverFromTrack(
+			tr, err = c.pc.AddTransceiverFromTrack(
 				NewTrack(media.Kind),
 				webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionSendonly},
 			)
 		case core.DirectionSendRecv:
 			// default transceiver is sendrecv
-			_, err = c.pc.AddTransceiverFromTrack(NewTrack(media.Kind))
+			tr, err = c.pc.AddTransceiverFromTrack(NewTrack(media.Kind))
 		default:
 			// Nest cameras require data channel
 			_, err = c.pc.CreateDataChannel(media.Kind, nil)
@@ -31,6 +34,11 @@ func (c *Conn) CreateOffer(medias []*core.Media) (string, error) {
 
 		if err != nil {
 			return "", err
+		}
+		if tr != nil && media.Kind == core.KindVideo && len(c.videoCodecPreferences) > 0 {
+			if err = tr.SetCodecPreferences(c.videoCodecPreferences); err != nil {
+				return "", err
+			}
 		}
 	}
 

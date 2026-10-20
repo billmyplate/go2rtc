@@ -33,6 +33,16 @@ func (c *Conn) GetTrack(media *core.Media, codec *core.Codec) (*core.Receiver, e
 	case core.ModePassiveProducer, core.ModeActiveProducer:
 		// Passive producers: OBS Studio via WHIP or Browser
 		// Active producers: go2rtc as WebRTC client or WebTorrent
+		//
+		// A second payload type of the same codec (H264/96 then H264/98) must
+		// feed the receiver the consumer already bound. Matching the *Codec
+		// pointer misses, and a new receiver leaves that consumer empty.
+		// A different codec name, including HEVC, still gets its own receiver.
+		for _, track := range c.Receivers {
+			if track.Media == media && track.Codec.Match(codec) {
+				return track, nil
+			}
+		}
 
 	default:
 		panic(core.Caller())

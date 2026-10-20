@@ -20,6 +20,51 @@ func NewAPI() (*webrtc.API, error) {
 	return NewServerAPI("", "", nil)
 }
 
+// NewRingAPI is the peer connection API for a Ring live view.
+// It registers the shared codecs plus RTX for H.264 payload type 98,
+// and nothing else uses that RTX codec.
+func NewRingAPI() (*webrtc.API, error) {
+	return newServerAPI("", "", nil, []webrtc.RTPCodecParameters{h264HighRTX()})
+}
+
+// RingVideoCodecPreferences is the only video codec list a Ring live view may offer:
+// H.264 profile-level-id=640032 and the RTX payload whose apt points at it.
+func RingVideoCodecPreferences() []webrtc.RTPCodecParameters {
+	return []webrtc.RTPCodecParameters{h264HighProfile(), h264HighRTX()}
+}
+
+func videoRTCPFeedback() []webrtc.RTCPFeedback {
+	return []webrtc.RTCPFeedback{
+		{"goog-remb", ""},
+		{"ccm", "fir"},
+		{"nack", ""},
+		{"nack", "pli"},
+	}
+}
+
+func h264HighProfile() webrtc.RTPCodecParameters {
+	return webrtc.RTPCodecParameters{
+		RTPCodecCapability: webrtc.RTPCodecCapability{
+			MimeType:     webrtc.MimeTypeH264,
+			ClockRate:    90000,
+			SDPFmtpLine:  "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=640032",
+			RTCPFeedback: videoRTCPFeedback(),
+		},
+		PayloadType: 98,
+	}
+}
+
+func h264HighRTX() webrtc.RTPCodecParameters {
+	return webrtc.RTPCodecParameters{
+		RTPCodecCapability: webrtc.RTPCodecCapability{
+			MimeType:    webrtc.MimeTypeRTX,
+			ClockRate:   90000,
+			SDPFmtpLine: "apt=98",
+		},
+		PayloadType: 99,
+	}
+}
+
 type Filters struct {
 	Candidates []string `yaml:"candidates"`
 	Loopback   bool     `yaml:"loopback"`
@@ -93,6 +138,10 @@ func (f *Filters) IPFilter(ip net.IP) bool {
 }
 
 func NewServerAPI(network, address string, filters *Filters) (*webrtc.API, error) {
+	return newServerAPI(network, address, filters, nil)
+}
+
+func newServerAPI(network, address string, filters *Filters, extra []webrtc.RTPCodecParameters) (*webrtc.API, error) {
 	// for debug logs add to env: `PION_LOG_DEBUG=all`
 	m := &webrtc.MediaEngine{}
 	//if err := m.RegisterDefaultCodecs(); err != nil {
@@ -100,6 +149,11 @@ func NewServerAPI(network, address string, filters *Filters) (*webrtc.API, error
 	//}
 	if err := RegisterDefaultCodecs(m); err != nil {
 		return nil, err
+	}
+	for _, codec := range extra {
+		if err := m.RegisterCodec(codec, webrtc.RTPCodecTypeVideo); err != nil {
+			return nil, err
+		}
 	}
 
 	i := &interceptor.Registry{}
@@ -263,19 +317,14 @@ func RegisterDefaultCodecs(m *webrtc.MediaEngine) error {
 		}
 	}
 
-	videoRTCPFeedback := []webrtc.RTCPFeedback{
-		{"goog-remb", ""},
-		{"ccm", "fir"},
-		{"nack", ""},
-		{"nack", "pli"},
-	}
+	feedback := videoRTCPFeedback()
 	for _, codec := range []webrtc.RTPCodecParameters{
 		{
 			RTPCodecCapability: webrtc.RTPCodecCapability{
 				MimeType:     webrtc.MimeTypeH264,
 				ClockRate:    90000,
 				SDPFmtpLine:  "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f",
-				RTCPFeedback: videoRTCPFeedback,
+				RTCPFeedback: feedback,
 			},
 			PayloadType: 96, // Chrome v110 - PayloadType: 102
 		},
@@ -284,25 +333,17 @@ func RegisterDefaultCodecs(m *webrtc.MediaEngine) error {
 				MimeType:     webrtc.MimeTypeH264,
 				ClockRate:    90000,
 				SDPFmtpLine:  "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
-				RTCPFeedback: videoRTCPFeedback,
+				RTCPFeedback: feedback,
 			},
 			PayloadType: 97, // Chrome v110 - PayloadType: 106
 		},
-		{
-			RTPCodecCapability: webrtc.RTPCodecCapability{
-				MimeType:     webrtc.MimeTypeH264,
-				ClockRate:    90000,
-				SDPFmtpLine:  "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=640032",
-				RTCPFeedback: videoRTCPFeedback,
-			},
-			PayloadType: 98, // Chrome v110 - PayloadType: 112
-		},
+		h264HighProfile(),
 		// macOS Safari 15.1
 		{
 			RTPCodecCapability: webrtc.RTPCodecCapability{
 				MimeType:     webrtc.MimeTypeH265,
 				ClockRate:    90000,
-				RTCPFeedback: videoRTCPFeedback,
+				RTCPFeedback: feedback,
 			},
 			PayloadType: 100,
 		},
