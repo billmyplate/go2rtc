@@ -558,7 +558,20 @@ func (c *RingApi) ensureSession() error {
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("session request failed with status %d: %s", resp.StatusCode, string(respBody))
+		details := resp.Header.Get("X-Response-Code-Details")
+		sessionErr := fmt.Errorf("session request failed with status %d: x-response-code-details=%s: %s", resp.StatusCode, details, string(respBody))
+
+		// Envoy can reject POST /session with 406 before Ring sees it, while the
+		// same bearer token can still read ring_devices. Do not call Request():
+		// it calls ensureSession and would deadlock on sessionMutex.
+		if resp.StatusCode == http.StatusNotAcceptable {
+			if err := c.confirmBearerWithRingDevices(); err != nil {
+				return fmt.Errorf("%w: %v", sessionErr, err)
+			}
+			return nil
+		}
+
+		return sessionErr
 	}
 
 	var sessionResp SessionResponse
@@ -570,6 +583,41 @@ func (c *RingApi) ensureSession() error {
 	c.sessionExpiry = time.Now().Add(sessionValidTime)
 
 	// Aktualisiere den gecachten Client
+	cacheMutex.Lock()
+	clientCache[c.cacheKey] = c
+	cacheMutex.Unlock()
+
+	return nil
+}
+
+// confirmBearerWithRingDevices accepts a bearer token when POST /session is
+// blocked but GET /ring_devices succeeds. The caller holds sessionMutex.
+func (c *RingApi) confirmBearerWithRingDevices() error {
+	req, err := http.NewRequest("GET", ClientAPI("ring_devices"), nil)
+	if err != nil {
+		return fmt.Errorf("ring_devices check: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+c.authToken.AccessToken)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "android:com.ringapp")
+	req.Header.Set("hardware_id", c.hardwareID)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("ring_devices check: %v", err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("ring_devices check: status %d", resp.StatusCode)
+	}
+
+	c.session = &SessionResponse{}
+	c.sessionExpiry = time.Now().Add(sessionValidTime)
+
 	cacheMutex.Lock()
 	clientCache[c.cacheKey] = c
 	cacheMutex.Unlock()
